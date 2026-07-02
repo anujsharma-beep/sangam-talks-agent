@@ -37,6 +37,17 @@ async def health():
     return {"status": "ok"}
 
 @app.get("/")
+@app.post("/test/process/{video_id}")
+async def test_process_video(video_id: str):
+    """Test endpoint to manually trigger video processing."""
+    logger.info(f"Manual test trigger for video {video_id}")
+    try:
+        asyncio.run(process_video(video_id))
+        return {"status": "processing", "video_id": video_id}
+    except Exception as e:
+        logger.error(f"Test endpoint error: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
+        
 async def root():
     return {
         "name": "SangamTalks Syndication Agent",
