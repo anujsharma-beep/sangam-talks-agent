@@ -1,5 +1,4 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
 from src.db import Video, VideoStatus, GeneratedContent, ContentStatus, Post, get_session_factory
 from src.content_generator import generate_all_platforms
 from src.adapters.x_adapter import XAdapter
@@ -8,10 +7,9 @@ from src.adapters.facebook_adapter import FacebookAdapter
 from src.adapters.instagram_adapter import InstagramAdapter
 from src.config import settings
 from src.logger import logger, log_event
-from datetime import datetime, timedelta
 import httpx
 
-async def fetch_youtube_metadata(video_id: str) -> dict:
+def fetch_youtube_metadata(video_id: str) -> dict:
     """Fetch video title, description, thumbnail from YouTube API."""
     
     params = {
@@ -21,27 +19,26 @@ async def fetch_youtube_metadata(video_id: str) -> dict:
     }
     
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://www.googleapis.com/youtube/v3/videos",
-                params=params,
-                timeout=10
-            )
+        response = httpx.get(
+            "https://www.googleapis.com/youtube/v3/videos",
+            params=params,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("items", [])
             
-            if response.status_code == 200:
-                data = response.json()
-                items = data.get("items", [])
-                
-                if items:
-                    snippet = items[0]["snippet"]
-                    return {
-                        "title": snippet["title"],
-                        "description": snippet.get("description", ""),
-                        "thumbnail_url": snippet["thumbnails"]["maxres"]["url"] if "maxres" in snippet["thumbnails"] else snippet["thumbnails"]["default"]["url"],
-                        "published_at": snippet["publishedAt"]
-                    }
-            else:
-                logger.error(f"YouTube API error: {response.status_code}")
+            if items:
+                snippet = items[0]["snippet"]
+                return {
+                    "title": snippet["title"],
+                    "description": snippet.get("description", ""),
+                    "thumbnail_url": snippet["thumbnails"]["maxres"]["url"] if "maxres" in snippet["thumbnails"] else snippet["thumbnails"]["default"]["url"],
+                    "published_at": snippet["publishedAt"]
+                }
+        else:
+            logger.error(f"YouTube API error: {response.status_code}")
         
         return None
     
@@ -49,7 +46,7 @@ async def fetch_youtube_metadata(video_id: str) -> dict:
         logger.error(f"YouTube fetch error for {video_id}: {e}", exc_info=True)
         return None
 
-async def process_video(video_id: str):
+def process_video(video_id: str):
     """Main orchestration: fetch -> generate -> post."""
     
     db = None
@@ -73,7 +70,7 @@ async def process_video(video_id: str):
         
         # 2. Fetch YouTube metadata
         logger.info(f"Fetching metadata for {video_id}")
-        metadata = await fetch_youtube_metadata(video_id)
+        metadata = fetch_youtube_metadata(video_id)
         
         if not metadata:
             logger.error(f"Failed to fetch metadata for {video_id}")
@@ -131,7 +128,7 @@ async def process_video(video_id: str):
         # 4. Post to all platforms
         logger.info(f"Posting to platforms for {video_id}")
         try:
-            await post_to_platforms(video_id, db)
+            post_to_platforms(video_id, db)
         except Exception as post_error:
             logger.error(f"Error posting to platforms for {video_id}: {post_error}", exc_info=True)
             video.status = VideoStatus.FAILED
@@ -164,7 +161,7 @@ async def process_video(video_id: str):
         if db:
             db.close()
 
-async def post_to_platforms(video_id: str, db: Session):
+def post_to_platforms(video_id: str, db: Session):
     """Post generated content to all platforms."""
     
     # Initialize adapters with credentials
