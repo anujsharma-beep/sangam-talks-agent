@@ -50,7 +50,6 @@ def load_prompts() -> dict:
     config_path = Path(__file__).parent.parent / "config" / "prompts.yaml"
     
     if not config_path.exists():
-        # Return default prompts instead of crashing
         return {
             "platforms": {
                 "x": {
@@ -82,6 +81,23 @@ def load_prompts() -> dict:
     except Exception as e:
         print(f"Warning: Could not load prompts config: {e}")
         return {}
+
+def validate_required_settings():
+    """Validate that all required settings are present."""
+    settings = get_settings()
+    
+    required = {
+        'YOUTUBE_API_KEY': settings.YOUTUBE_API_KEY,
+        'ANTHROPIC_API_KEY': settings.ANTHROPIC_API_KEY,
+    }
+    
+    missing = []
+    for name, value in required.items():
+        if not value or value.startswith('test-') or value.startswith('sk-ant-test'):
+            missing.append(name)
+    
+    if missing:
+        raise ValueError(f"Missing or placeholder API keys: {', '.join(missing)}. Please add real keys to Railway environment variables.")
 
 settings = get_settings()
 prompts_config = load_prompts()
