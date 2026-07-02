@@ -1,0 +1,54 @@
+brand:
+  name: "SangamTalks"
+  mission: "Reclaiming India's civilizational narrative"
+  voice: "Thoughtful, evidence-based, patriotic, revivalist"
+  
+platforms:
+  x:
+    character_limit: 280
+    tone: "Witty, thought-provoking, urgent"
+    style: "Thread-friendly, tease the topic"
+    hashtags: "#IndiaHistory #IKS #Dharma"
+    prompt: |
+      - Keep it under 280 characters
+      - Lead with a compelling question or hook
+      - End with a call-to-action link
+      - Add a thread emoji (🧵) if this could be expanded
+      - Use 2-3 relevant hashtags
+  
+  linkedin:
+    character_limit: 3000
+    tone: "Professional, insightful, authoritative"
+    style: "In-depth analysis, professional audience"
+    hashtags: "#IndianHeritage #History #CivilizationStudies"
+    prompt: |
+      - Write 300-500 words
+      - Structure: Hook → Context → Insight → Takeaway
+      - Use short paragraphs (2-3 sentences each)
+      - Include 1-2 key learnings
+      - End with a discussion question
+  
+  facebook:
+    character_limit: 5000
+    tone: "Warm, engaging, community-driven"
+    style: "Conversational, storytelling"
+    hashtags: "#SangamTalks #IndianHistory #Awareness"
+    prompt: |
+      - Write 400-600 words
+      - Start with a personal observation or story
+      - Make it accessible to general audience
+      - Include emotional connection
+      - Encourage comments and shares
+  
+  instagram:
+    character_limit: 2200
+    tone: "Visual, poetic, inspirational"
+    style: "Caption supports the thumbnail image"
+    hashtags: "#SangamTalks #IndianCulture #Heritage #Dharma #IKS"
+    prompt: |
+      - Write 100-200 words
+      - Lead with an engaging statement
+      - Use line breaks for readability
+      - Include 5-8 relevant hashtags
+      - Create a visual story with the image
+      - Use emojis sparingly but meaningfully
