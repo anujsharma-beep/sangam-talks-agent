@@ -154,7 +154,7 @@ def poll_youtube_channel():
         # Step 1: Get channel info to find uploads playlist ID
         channel_params = {
             "part": "contentDetails",
-            "id": "UCRB31u4MsqD1xsQq1ZZDSnA",
+            "id": "UCvFG9tmS4lrIWubj994CY5g",
             "key": settings.YOUTUBE_API_KEY
         }
         
