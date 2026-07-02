@@ -5,9 +5,24 @@ from datetime import datetime
 import enum
 from src.config import settings
 
-engine = create_engine(settings.DATABASE_URL)
-SessionLocal = sessionmaker(bind=engine)
+# Don't create engine at import time - do it lazily
+engine = None
+SessionLocal = None
 Base = declarative_base()
+
+def get_engine():
+    """Get or create the database engine (lazy loading)."""
+    global engine
+    if engine is None:
+        engine = create_engine(settings.DATABASE_URL)
+    return engine
+
+def get_session_factory():
+    """Get or create the session factory (lazy loading)."""
+    global SessionLocal
+    if SessionLocal is None:
+        SessionLocal = sessionmaker(bind=get_engine())
+    return SessionLocal
 
 class VideoStatus(str, enum.Enum):
     RECEIVED = "received"
@@ -24,7 +39,7 @@ class ContentStatus(str, enum.Enum):
 class Video(Base):
     __tablename__ = "videos"
     
-    id = Column(String, primary_key=True)  # YouTube video ID
+    id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
     description = Column(Text)
     thumbnail_url = Column(String)
@@ -38,7 +53,7 @@ class GeneratedContent(Base):
     
     id = Column(Integer, primary_key=True)
     video_id = Column(String, nullable=False)
-    platform = Column(String, nullable=False)  # x, linkedin, facebook, instagram
+    platform = Column(String, nullable=False)
     draft_content = Column(Text, nullable=False)
     approved_content = Column(Text)
     status = Column(Enum(ContentStatus), default=ContentStatus.PENDING)
@@ -53,8 +68,8 @@ class Post(Base):
     generated_content_id = Column(Integer)
     platform = Column(String, nullable=False)
     post_url = Column(String)
-    post_id = Column(String)  # Platform-specific ID
-    status = Column(String, default="pending")  # pending, posted, failed
+    post_id = Column(String)
+    status = Column(String, default="pending")
     error_message = Column(Text)
     retry_count = Column(Integer, default=0)
     next_retry_at = Column(DateTime)
@@ -73,11 +88,13 @@ class WebhookLog(Base):
 
 def init_db():
     """Create all tables."""
+    engine = get_engine()
     Base.metadata.create_all(bind=engine)
 
 def get_db():
     """Database session dependency."""
-    db = SessionLocal()
+    SessionFactory = get_session_factory()
+    db = SessionFactory()
     try:
         yield db
     finally:
