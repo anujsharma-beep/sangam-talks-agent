@@ -1,243 +1,230 @@
-from sqlalchemy.orm import Session
-from src.db import Video, VideoStatus, GeneratedContent, ContentStatus, Post, get_session_factory
-from src.content_generator import generate_all_platforms
-from src.adapters.x_adapter import XAdapter
-from src.adapters.linkedin_adapter import LinkedInAdapter
-from src.adapters.facebook_adapter import FacebookAdapter
-from src.adapters.instagram_adapter import InstagramAdapter
-from src.config import settings
-from src.logger import logger, log_event
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from apscheduler.schedulers.background import BackgroundScheduler
 import httpx
+import threading
+from src.db import init_db, get_session_factory, Video
+from src.orchestrator import process_video
+from src.config import settings, validate_required_settings
+from src.logger import setup_logging, logger
 
-def fetch_youtube_metadata(video_id: str) -> dict:
-    """Fetch video title, description, thumbnail from YouTube API."""
-    
-    params = {
-        "id": video_id,
-        "key": settings.YOUTUBE_API_KEY,
-        "part": "snippet"
-    }
-    
+setup_logging(settings.LOG_LEVEL)
+
+app = FastAPI(
+    title="SangamTalks Syndication Agent",
+    version="1.0.0"
+)
+
+@app.on_event("startup")
+async def startup():
     try:
+        logger.info("Validating settings...")
+        validate_required_settings()
+        logger.info("Settings valid ✓")
+        
+        logger.info("Initializing database...")
+        init_db()
+        logger.info("Database ready ✓")
+        
+        logger.info("Starting YouTube polling scheduler...")
+        start_scheduler()
+        logger.info("YouTube polling started (checking every 2 minutes) ✓")
+    except Exception as e:
+        logger.error(f"Startup error: {e}", exc_info=True)
+        raise
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+@app.get("/")
+async def root():
+    return {
+        "name": "SangamTalks Syndication Agent",
+        "version": "1.0.0",
+        "status": "running"
+    }
+
+@app.get("/test", response_class=HTMLResponse)
+async def test_page():
+    """Simple HTML page to test video processing."""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>SangamTalks Agent - Test</title>
+        <style>
+            body { font-family: Arial; margin: 40px; background: #f5f5f5; }
+            .container { background: white; padding: 30px; border-radius: 8px; max-width: 500px; }
+            h1 { color: #333; }
+            input { padding: 10px; width: 100%; margin: 10px 0; font-size: 16px; box-sizing: border-box; }
+            button { padding: 12px 20px; background: #4CAF50; color: white; border: none; cursor: pointer; font-size: 16px; border-radius: 4px; width: 100%; margin-top: 10px; }
+            button:hover { background: #45a049; }
+            #result { margin-top: 20px; padding: 15px; border-radius: 4px; display: none; }
+            .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+            .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+            .loading { background: #d1ecf1; color: #0c5460; }
+            p { color: #666; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🎬 SangamTalks Agent Test</h1>
+            <p>Test the video processing pipeline without uploading to YouTube.</p>
+            
+            <label><strong>YouTube Video ID:</strong></label>
+            <input type="text" id="videoId" placeholder="e.g. ekNtWVVfUPo" value="ekNtWVVfUPo">
+            
+            <button onclick="testVideo()">▶️ Test Video Processing</button>
+            
+            <div id="result"></div>
+            
+            <p style="margin-top: 30px; font-size: 12px; color: #999;">
+                <strong>Next steps:</strong> After clicking the button, go to Railway Dashboard → Deployments → View logs to see processing details.
+            </p>
+        </div>
+
+        <script>
+        async function testVideo() {
+            const videoId = document.getElementById('videoId').value;
+            const resultDiv = document.getElementById('result');
+            
+            if (!videoId) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = 'Please enter a video ID';
+                resultDiv.style.display = 'block';
+                return;
+            }
+            
+            resultDiv.className = 'loading';
+            resultDiv.textContent = '⏳ Processing started... Check Railway logs for details. This may take 1-2 minutes.';
+            resultDiv.style.display = 'block';
+            
+            try {
+                const response = await fetch(`/test/process/${videoId}`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'success';
+                    resultDiv.textContent = `✅ Processing started for video ${videoId}. Check Railway Deploy Logs for completion details.`;
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.textContent = `❌ Error: ${data.error}`;
+                }
+            } catch (error) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = `❌ Network error: ${error.message}`;
+            }
+        }
+        </script>
+    </body>
+    </html>
+    """
+
+@app.post("/test/process/{video_id}")
+async def test_process_video(video_id: str):
+    """Test endpoint to manually trigger video processing."""
+    logger.info(f"Manual test trigger for video {video_id}")
+    try:
+        # Run in thread to avoid blocking
+        thread = threading.Thread(target=process_video, args=(video_id,))
+        thread.start()
+        return {"status": "processing", "video_id": video_id}
+    except Exception as e:
+        logger.error(f"Test endpoint error: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+# Background scheduler for polling
+scheduler = BackgroundScheduler()
+
+def poll_youtube_channel():
+    """Poll YouTube for new videos every 2 minutes."""
+    try:
+        logger.info("Polling YouTube for new videos...")
+        
+        # Validate API key exists
+        if not settings.YOUTUBE_API_KEY or settings.YOUTUBE_API_KEY.startswith('test-'):
+            logger.error("YouTube API key not configured - skipping poll")
+            return
+        
+        params = {
+            "part": "snippet",
+            "channelId": "UCRB31u4MsqD1xsQq1ZZDSnA",
+            "order": "date",
+            "maxResults": 5,
+            "key": settings.YOUTUBE_API_KEY
+        }
+        
         response = httpx.get(
-            "https://www.googleapis.com/youtube/v3/videos",
+            "https://www.googleapis.com/youtube/v3/search",
             params=params,
             timeout=10
         )
         
-        if response.status_code == 200:
-            data = response.json()
-            items = data.get("items", [])
-            
-            if items:
-                snippet = items[0]["snippet"]
-                return {
-                    "title": snippet["title"],
-                    "description": snippet.get("description", ""),
-                    "thumbnail_url": snippet["thumbnails"]["maxres"]["url"] if "maxres" in snippet["thumbnails"] else snippet["thumbnails"]["default"]["url"],
-                    "published_at": snippet["publishedAt"]
-                }
-        else:
-            logger.error(f"YouTube API error: {response.status_code}")
-        
-        return None
-    
-    except Exception as e:
-        logger.error(f"YouTube fetch error for {video_id}: {e}", exc_info=True)
-        return None
-
-def process_video(video_id: str):
-    """Main orchestration: fetch -> generate -> post."""
-    
-    db = None
-    
-    try:
-        # Get session factory
-        SessionFactory = get_session_factory()
-        if SessionFactory is None:
-            logger.error(f"Session factory is None - cannot process video {video_id}")
+        if response.status_code != 200:
+            logger.error(f"YouTube API error: {response.status_code} - {response.text[:200]}")
             return
         
-        db = SessionFactory()
+        data = response.json()
+        items = data.get("items", [])
         
-        # 1. Get video from DB
-        video = db.query(Video).filter(Video.id == video_id).first()
-        if not video:
-            logger.error(f"Video {video_id} not found in database")
+        if not items:
+            logger.info("No new videos found")
             return
         
-        logger.info(f"Processing video {video_id}...")
+        logger.info(f"Found {len(items)} items from YouTube")
         
-        # 2. Fetch YouTube metadata
-        logger.info(f"Fetching metadata for {video_id}")
-        metadata = fetch_youtube_metadata(video_id)
-        
-        if not metadata:
-            logger.error(f"Failed to fetch metadata for {video_id}")
-            video.status = VideoStatus.FAILED
-            db.commit()
-            return
-        
-        # Update video
-        video.title = metadata["title"]
-        video.description = metadata["description"]
-        video.thumbnail_url = metadata["thumbnail_url"]
-        video.published_at = metadata["published_at"]
-        db.commit()
-        
-        logger.info(f"Video {video_id} title: {video.title}")
-        
-        # 3. Generate content for all platforms
-        logger.info(f"Generating content for {video_id}")
-        try:
-            results = generate_all_platforms(
-                metadata["title"],
-                metadata["description"],
-                metadata["thumbnail_url"]
-            )
-        except Exception as gen_error:
-            logger.error(f"Content generation error for {video_id}: {gen_error}", exc_info=True)
-            video.status = VideoStatus.FAILED
-            db.commit()
-            return
-        
-        # Store generated content
-        for platform, result in results.items():
+        for item in items:
             try:
-                if result["status"] == "success":
-                    gen_content = GeneratedContent(
-                        video_id=video_id,
-                        platform=platform,
-                        draft_content=result["content"],
-                        status=ContentStatus.PENDING
-                    )
-                    db.add(gen_content)
+                if item.get("id", {}).get("kind") != "youtube#video":
+                    continue
+                
+                video_id = item["id"]["videoId"]
+                
+                # Check if already processed
+                try:
+                    SessionFactory = get_session_factory()
+                    if SessionFactory is None:
+                        logger.error("Session factory returned None - database not ready")
+                        return
                     
-                    log_event(logger, "content_generated", {
-                        "video_id": video_id,
-                        "platform": platform,
-                        "length": len(result["content"])
-                    })
-                else:
-                    logger.error(f"Content generation failed for {platform}: {result.get('error')}")
-            except Exception as store_error:
-                logger.error(f"Error storing content for {platform}: {store_error}", exc_info=True)
-        
-        db.commit()
-        
-        # 4. Post to all platforms
-        logger.info(f"Posting to platforms for {video_id}")
-        try:
-            post_to_platforms(video_id, db)
-        except Exception as post_error:
-            logger.error(f"Error posting to platforms for {video_id}: {post_error}", exc_info=True)
-            video.status = VideoStatus.FAILED
-            db.commit()
-            return
-        
-        video.status = VideoStatus.POSTED
-        db.commit()
-        
-        log_event(logger, "video_processed", {
-            "video_id": video_id,
-            "title": video.title,
-            "status": "success"
-        })
-        
-        logger.info(f"Video {video_id} processing complete ✓")
+                    db = SessionFactory()
+                    existing = db.query(Video).filter(Video.id == video_id).first()
+                    db.close()
+                    
+                    if existing:
+                        logger.info(f"Video {video_id} already processed - skipping")
+                        continue
+                    
+                    logger.info(f"Found new video: {video_id} - processing...")
+                    process_video(video_id)
+                    logger.info(f"Video {video_id} processing complete")
+                    
+                except Exception as db_error:
+                    logger.error(f"Database error for video {video_id}: {db_error}", exc_info=True)
+                    continue
+            
+            except Exception as item_error:
+                logger.error(f"Error processing YouTube item: {item_error}", exc_info=True)
+                continue
     
     except Exception as e:
-        logger.error(f"Orchestration error for {video_id}: {e}", exc_info=True)
-        try:
-            if db:
-                video = db.query(Video).filter(Video.id == video_id).first()
-                if video:
-                    video.status = VideoStatus.FAILED
-                    db.commit()
-        except Exception as fail_error:
-            logger.error(f"Error marking video as failed: {fail_error}")
-    
-    finally:
-        if db:
-            db.close()
+        logger.error(f"Poll error: {e}", exc_info=True)
 
-def post_to_platforms(video_id: str, db: Session):
-    """Post generated content to all platforms."""
-    
-    # Initialize adapters with credentials
-    adapters = {
-        "x": XAdapter({
-            "access_token": settings.X_ACCESS_TOKEN,
-            "username": "sangamtalks"
-        }),
-        "linkedin": LinkedInAdapter({
-            "access_token": settings.LINKEDIN_ACCESS_TOKEN,
-            "person_urn": settings.LINKEDIN_PERSON_URN
-        }),
-        "facebook": FacebookAdapter({
-            "page_id": settings.FACEBOOK_PAGE_ID,
-            "access_token": settings.FACEBOOK_ACCESS_TOKEN
-        }),
-        "instagram": InstagramAdapter({
-            "account_id": settings.INSTAGRAM_ACCOUNT_ID,
-            "access_token": settings.INSTAGRAM_ACCESS_TOKEN
-        })
-    }
-    
-    # Get generated content for this video
-    gen_contents = db.query(GeneratedContent).filter(
-        GeneratedContent.video_id == video_id
-    ).all()
-    
-    video = db.query(Video).filter(Video.id == video_id).first()
-    
-    for gen_content in gen_contents:
-        platform = gen_content.platform
-        content = gen_content.approved_content or gen_content.draft_content
-        
-        if platform not in adapters:
-            logger.warning(f"Unknown platform: {platform}")
-            continue
-        
-        try:
-            adapter = adapters[platform]
-            success, result = adapter.post(content, video.thumbnail_url)
-            
-            # Create post record
-            post = Post(
-                video_id=video_id,
-                generated_content_id=gen_content.id,
-                platform=platform,
-                post_id=result if success else None,
-                status="posted" if success else "failed",
-                error_message=None if success else result,
-                retry_count=0
-            )
-            
-            if success:
-                post.post_url = adapter.get_post_url(result)
-                logger.info(f"Posted to {platform}: {post.post_url}")
-            else:
-                logger.error(f"Failed to post to {platform}: {result}")
-            
-            db.add(post)
-            
-            log_event(logger, "post_published", {
-                "video_id": video_id,
-                "platform": platform,
-                "success": success
-            })
-        
-        except Exception as adapter_error:
-            logger.error(f"Error posting to {platform}: {adapter_error}", exc_info=True)
-            post = Post(
-                video_id=video_id,
-                generated_content_id=gen_content.id,
-                platform=platform,
-                status="failed",
-                error_message=str(adapter_error),
-                retry_count=0
-            )
-            db.add(post)
-    
-    db.commit()
+def start_scheduler():
+    """Start polling scheduler."""
+    scheduler.add_job(
+        poll_youtube_channel,
+        'interval',
+        minutes=2,
+        id='poll_youtube',
+        max_instances=1
+    )
+    scheduler.start()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
