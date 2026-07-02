@@ -11,5 +11,4 @@ apscheduler==3.10.4
 pyyaml==6.0.1
 google-auth==2.24.0
 tweepy==4.14.0
-python-linkedin==0.1.4
 facebook-sdk==3.0.2
