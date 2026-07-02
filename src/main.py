@@ -44,12 +44,10 @@ last_checked_time = None
 
 def poll_youtube_channel():
     """Poll YouTube channel for new videos every 5 minutes."""
-    global last_checked_time
-    
     try:
         params = {
             "part": "snippet",
-            "channelId": "UCvFG9tmS4lrIWubj994CY5g",  # Your channel ID
+            "channelId": "UCRB31u4MsqD1xsQq1ZZDSnA",  # Your channel ID
             "order": "date",
             "maxResults": 5,
             "key": settings.YOUTUBE_API_KEY
@@ -69,11 +67,11 @@ def poll_youtube_channel():
             for item in items:
                 if item.get("id", {}).get("kind") == "youtube#video":
                     video_id = item["id"]["videoId"]
-                    published = item["snippet"]["publishedAt"]
                     
                     # Check if this video was already processed
-                    from src.db import SessionLocal, Video
-                    db = SessionLocal()
+                    from src.db import get_session_factory, Video
+                    SessionFactory = get_session_factory()
+                    db = SessionFactory()
                     existing = db.query(Video).filter(Video.id == video_id).first()
                     db.close()
                     
@@ -83,7 +81,7 @@ def poll_youtube_channel():
     
     except Exception as e:
         logger.error(f"Poll error: {e}")
-
+        
 def start_scheduler():
     """Start background polling job."""
     scheduler.add_job(
