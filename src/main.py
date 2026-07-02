@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
 import httpx
@@ -37,6 +38,92 @@ async def health():
     return {"status": "ok"}
 
 @app.get("/")
+async def root():
+    return {
+        "name": "SangamTalks Syndication Agent",
+        "version": "1.0.0",
+        "status": "running"
+    }
+
+@app.get("/test", response_class=HTMLResponse)
+async def test_page():
+    """Simple HTML page to test video processing."""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>SangamTalks Agent - Test</title>
+        <style>
+            body { font-family: Arial; margin: 40px; background: #f5f5f5; }
+            .container { background: white; padding: 30px; border-radius: 8px; max-width: 500px; }
+            h1 { color: #333; }
+            input { padding: 10px; width: 100%; margin: 10px 0; font-size: 16px; box-sizing: border-box; }
+            button { padding: 12px 20px; background: #4CAF50; color: white; border: none; cursor: pointer; font-size: 16px; border-radius: 4px; width: 100%; margin-top: 10px; }
+            button:hover { background: #45a049; }
+            #result { margin-top: 20px; padding: 15px; border-radius: 4px; display: none; }
+            .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+            .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+            .loading { background: #d1ecf1; color: #0c5460; }
+            p { color: #666; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🎬 SangamTalks Agent Test</h1>
+            <p>Test the video processing pipeline without uploading to YouTube.</p>
+            
+            <label><strong>YouTube Video ID:</strong></label>
+            <input type="text" id="videoId" placeholder="e.g. ekNtWVVfUPo" value="ekNtWVVfUPo">
+            
+            <button onclick="testVideo()">▶️ Test Video Processing</button>
+            
+            <div id="result"></div>
+            
+            <p style="margin-top: 30px; font-size: 12px; color: #999;">
+                <strong>Next steps:</strong> After clicking the button, go to Railway Dashboard → Deployments → View logs to see processing details.
+            </p>
+        </div>
+
+        <script>
+        async function testVideo() {
+            const videoId = document.getElementById('videoId').value;
+            const resultDiv = document.getElementById('result');
+            
+            if (!videoId) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = 'Please enter a video ID';
+                resultDiv.style.display = 'block';
+                return;
+            }
+            
+            resultDiv.className = 'loading';
+            resultDiv.textContent = '⏳ Processing started... Check Railway logs for details. This may take 1-2 minutes.';
+            resultDiv.style.display = 'block';
+            
+            try {
+                const response = await fetch(`/test/process/${videoId}`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'success';
+                    resultDiv.textContent = `✅ Processing started for video ${videoId}. Check Railway Deploy Logs for completion details.`;
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.textContent = `❌ Error: ${data.error}`;
+                }
+            } catch (error) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = `❌ Network error: ${error.message}`;
+            }
+        }
+        </script>
+    </body>
+    </html>
+    """
+
 @app.post("/test/process/{video_id}")
 async def test_process_video(video_id: str):
     """Test endpoint to manually trigger video processing."""
@@ -47,14 +134,8 @@ async def test_process_video(video_id: str):
     except Exception as e:
         logger.error(f"Test endpoint error: {e}", exc_info=True)
         return {"status": "error", "error": str(e)}
-        
-async def root():
-    return {
-        "name": "SangamTalks Syndication Agent",
-        "version": "1.0.0",
-        "status": "running"
-    }
 
+# Background scheduler for polling
 scheduler = BackgroundScheduler()
 
 def poll_youtube_channel():
