@@ -3,7 +3,8 @@ from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 import httpx
 import threading
-from src.db import init_db, get_session_factory, Video
+from datetime import datetime
+from src.db import init_db, get_session_factory, Video, VideoStatus
 from src.orchestrator import process_video
 from src.config import settings, validate_required_settings
 from src.logger import setup_logging, logger
@@ -193,18 +194,39 @@ def poll_youtube_channel():
                     
                     db = SessionFactory()
                     existing = db.query(Video).filter(Video.id == video_id).first()
-                    db.close()
                     
                     if existing:
                         logger.info(f"Video {video_id} already processed - skipping")
+                        db.close()
                         continue
                     
-                    logger.info(f"Found new video: {video_id} - processing...")
+                    # Create Video record in database FIRST
+                    logger.info(f"Found new video: {video_id} - creating record...")
+                    video = Video(
+                        id=video_id,
+                        title=item["snippet"]["title"],
+                        description=item["snippet"].get("description", ""),
+                        thumbnail_url=item["snippet"]["thumbnails"]["default"]["url"],
+                        published_at=item["snippet"]["publishedAt"],
+                        status=VideoStatus.RECEIVED
+                    )
+                    db.add(video)
+                    db.commit()
+                    db.close()
+                    
+                    logger.info(f"Video record created for {video_id}")
+                    
+                    # Now process the video
+                    logger.info(f"Processing video {video_id}...")
                     process_video(video_id)
                     logger.info(f"Video {video_id} processing complete")
                     
                 except Exception as db_error:
                     logger.error(f"Database error for video {video_id}: {db_error}", exc_info=True)
+                    try:
+                        db.close()
+                    except:
+                        pass
                     continue
             
             except Exception as item_error:
