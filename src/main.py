@@ -142,7 +142,7 @@ async def test_process_video(video_id: str):
 scheduler = BackgroundScheduler()
 
 def poll_youtube_channel():
-    """Poll YouTube for new videos every 2 minutes."""
+    """Poll YouTube uploads playlist for new videos every 2 minutes."""
     try:
         logger.info("Polling YouTube for new videos...")
         
@@ -151,41 +151,82 @@ def poll_youtube_channel():
             logger.error("YouTube API key not configured - skipping poll")
             return
         
-        params = {
-            "part": "snippet",
-            "channelId": "UCRB31u4MsqD1xsQq1ZZDSnA",
-            "order": "date",
-            "maxResults": 5,
+        # Step 1: Get channel info to find uploads playlist ID
+        channel_params = {
+            "part": "contentDetails",
+            "id": "UCRB31u4MsqD1xsQq1ZZDSnA",
             "key": settings.YOUTUBE_API_KEY
         }
         
-        response = httpx.get(
-            "https://www.googleapis.com/youtube/v3/search",
-            params=params,
-            timeout=10
-        )
+        try:
+            channel_response = httpx.get(
+                "https://www.googleapis.com/youtube/v3/channels",
+                params=channel_params,
+                timeout=10
+            )
+            
+            if channel_response.status_code != 200:
+                logger.error(f"YouTube Channel API error: {channel_response.status_code} - {channel_response.text[:200]}")
+                return
+            
+            channel_data = channel_response.json()
+            channel_items = channel_data.get("items", [])
+            
+            if not channel_items:
+                logger.error("Channel not found or not accessible")
+                return
+            
+            uploads_playlist_id = channel_items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+            logger.info(f"Using uploads playlist: {uploads_playlist_id}")
         
-        if response.status_code != 200:
-            logger.error(f"YouTube API error: {response.status_code} - {response.text[:200]}")
+        except Exception as channel_error:
+            logger.error(f"Error getting channel uploads playlist: {channel_error}", exc_info=True)
             return
         
-        data = response.json()
-        items = data.get("items", [])
+        # Step 2: Get videos from uploads playlist
+        playlist_params = {
+            "part": "snippet",
+            "playlistId": uploads_playlist_id,
+            "maxResults": 50,
+            "key": settings.YOUTUBE_API_KEY
+        }
+        
+        try:
+            response = httpx.get(
+                "https://www.googleapis.com/youtube/v3/playlistItems",
+                params=playlist_params,
+                timeout=10
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"YouTube Playlist API error: {response.status_code} - {response.text[:200]}")
+                return
+            
+            data = response.json()
+            items = data.get("items", [])
+        
+        except Exception as playlist_error:
+            logger.error(f"Error getting playlist items: {playlist_error}", exc_info=True)
+            return
         
         if not items:
-            logger.info("No new videos found")
+            logger.info("No videos found in uploads playlist")
             return
         
-        logger.info(f"Found {len(items)} items from YouTube")
+        logger.info(f"Found {len(items)} videos from uploads playlist")
         
         for item in items:
             try:
-                if item.get("id", {}).get("kind") != "youtube#video":
+                video_id = item.get("snippet", {}).get("resourceId", {}).get("videoId")
+                
+                if not video_id:
+                    logger.warning("Video ID missing from playlist item")
                     continue
                 
-                video_id = item["id"]["videoId"]
-                
                 # Check if already processed
+                SessionFactory = None
+                db = None
+                
                 try:
                     SessionFactory = get_session_factory()
                     if SessionFactory is None:
@@ -202,6 +243,7 @@ def poll_youtube_channel():
                     
                     # Create Video record in database FIRST
                     logger.info(f"Found new video: {video_id} - creating record...")
+                    
                     video = Video(
                         id=video_id,
                         title=item["snippet"]["title"],
@@ -210,13 +252,14 @@ def poll_youtube_channel():
                         published_at=item["snippet"]["publishedAt"],
                         status=VideoStatus.RECEIVED
                     )
+                    
                     db.add(video)
                     db.commit()
                     db.close()
                     
                     logger.info(f"Video record created for {video_id}")
                     
-                    # Now process the video
+                    # Now process the video in background thread
                     logger.info(f"Processing video {video_id}...")
                     process_video(video_id)
                     logger.info(f"Video {video_id} processing complete")
@@ -224,7 +267,8 @@ def poll_youtube_channel():
                 except Exception as db_error:
                     logger.error(f"Database error for video {video_id}: {db_error}", exc_info=True)
                     try:
-                        db.close()
+                        if db:
+                            db.close()
                     except:
                         pass
                     continue
