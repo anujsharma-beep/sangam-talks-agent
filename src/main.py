@@ -1,10 +1,8 @@
-from fastapi import FastAPI, Depends
-from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
+from fastapi import FastAPI
+from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
-
+import httpx
 from src.db import init_db, get_db
-from src.webhook import router as webhook_router
 from src.orchestrator import process_video
 from src.config import settings
 from src.logger import setup_logging, logger
@@ -25,21 +23,12 @@ async def startup():
     logger.info("Initializing database...")
     init_db()
     logger.info("Database ready")
-
-# Include routers
-app.include_router(webhook_router, prefix="/api", tags=["webhooks"])
+    start_scheduler()
 
 @app.get("/health")
 async def health():
     """Health check endpoint."""
     return {"status": "ok"}
-
-@app.post("/trigger/{video_id}")
-async def manual_trigger(video_id: str):
-    """Manually trigger processing for a video (for testing)."""
-    logger.info(f"Manual trigger for {video_id}")
-    asyncio.create_task(process_video(video_id))
-    return {"status": "triggered", "video_id": video_id}
 
 @app.get("/")
 async def root():
@@ -48,6 +37,64 @@ async def root():
         "version": "1.0.0",
         "status": "running"
     }
+
+# Background scheduler for polling YouTube
+scheduler = BackgroundScheduler()
+last_checked_time = None
+
+def poll_youtube_channel():
+    """Poll YouTube channel for new videos every 5 minutes."""
+    global last_checked_time
+    
+    try:
+        params = {
+            "part": "snippet",
+            "channelId": "UCvFG9tmS4lrIWubj994CY5g",  # Your channel ID
+            "order": "date",
+            "maxResults": 5,
+            "key": settings.YOUTUBE_API_KEY
+        }
+        
+        import httpx
+        response = httpx.get(
+            "https://www.googleapis.com/youtube/v3/search",
+            params=params,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("items", [])
+            
+            for item in items:
+                if item.get("id", {}).get("kind") == "youtube#video":
+                    video_id = item["id"]["videoId"]
+                    published = item["snippet"]["publishedAt"]
+                    
+                    # Check if this video was already processed
+                    from src.db import SessionLocal, Video
+                    db = SessionLocal()
+                    existing = db.query(Video).filter(Video.id == video_id).first()
+                    db.close()
+                    
+                    if not existing:
+                        logger.info(f"Found new video: {video_id}")
+                        asyncio.run(process_video(video_id))
+    
+    except Exception as e:
+        logger.error(f"Poll error: {e}")
+
+def start_scheduler():
+    """Start background polling job."""
+    scheduler.add_job(
+        poll_youtube_channel,
+        'interval',
+        minutes=5,
+        id='poll_youtube',
+        max_instances=1
+    )
+    scheduler.start()
+    logger.info("YouTube polling started - checking every 5 minutes")
 
 if __name__ == "__main__":
     import uvicorn
