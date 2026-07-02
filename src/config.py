@@ -46,13 +46,42 @@ def get_settings() -> Settings:
     return Settings()
 
 def load_prompts() -> dict:
-    """Load prompt templates from YAML config."""
+    """Load prompt templates from YAML config. Returns default if not found."""
     config_path = Path(__file__).parent.parent / "config" / "prompts.yaml"
-    if not config_path.exists():
-        raise FileNotFoundError(f"Prompts config not found at {config_path}")
     
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+    if not config_path.exists():
+        # Return default prompts instead of crashing
+        return {
+            "platforms": {
+                "x": {
+                    "character_limit": 280,
+                    "tone": "Thoughtful, engaging",
+                    "hashtags": "#SangamTalks"
+                },
+                "linkedin": {
+                    "character_limit": 3000,
+                    "tone": "Professional",
+                    "hashtags": "#SangamTalks"
+                },
+                "facebook": {
+                    "character_limit": 5000,
+                    "tone": "Community-driven",
+                    "hashtags": "#SangamTalks"
+                },
+                "instagram": {
+                    "character_limit": 2200,
+                    "tone": "Visual, inspirational",
+                    "hashtags": "#SangamTalks"
+                }
+            }
+        }
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"Warning: Could not load prompts config: {e}")
+        return {}
 
 settings = get_settings()
 prompts_config = load_prompts()
