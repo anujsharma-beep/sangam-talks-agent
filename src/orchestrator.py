@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
-from src.db import Video, VideoStatus, GeneratedContent, ContentStatus, Post, SessionLocal
+from src.db import Video, VideoStatus, GeneratedContent, ContentStatus, Post, get_session_factory
 from src.content_generator import generate_all_platforms
 from src.adapters.x_adapter import XAdapter
 from src.adapters.linkedin_adapter import LinkedInAdapter
@@ -52,9 +52,17 @@ async def fetch_youtube_metadata(video_id: str) -> dict:
 async def process_video(video_id: str):
     """Main orchestration: fetch -> generate -> post."""
     
-    db = SessionLocal()
+    db = None
     
     try:
+        # Get session factory
+        SessionFactory = get_session_factory()
+        if SessionFactory is None:
+            logger.error(f"Session factory is None - cannot process video {video_id}")
+            return
+        
+        db = SessionFactory()
+        
         # 1. Get video from DB
         video = db.query(Video).filter(Video.id == video_id).first()
         if not video:
@@ -144,15 +152,17 @@ async def process_video(video_id: str):
     except Exception as e:
         logger.error(f"Orchestration error for {video_id}: {e}", exc_info=True)
         try:
-            video = db.query(Video).filter(Video.id == video_id).first()
-            if video:
-                video.status = VideoStatus.FAILED
-                db.commit()
+            if db:
+                video = db.query(Video).filter(Video.id == video_id).first()
+                if video:
+                    video.status = VideoStatus.FAILED
+                    db.commit()
         except Exception as fail_error:
             logger.error(f"Error marking video as failed: {fail_error}")
     
     finally:
-        db.close()
+        if db:
+            db.close()
 
 async def post_to_platforms(video_id: str, db: Session):
     """Post generated content to all platforms."""
