@@ -285,7 +285,7 @@ def start_scheduler():
     scheduler.add_job(
         poll_youtube_channel,
         'interval',
-        minutes=2,
+        minutes=60,
         id='poll_youtube',
         max_instances=1
     )
