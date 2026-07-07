@@ -154,7 +154,7 @@ def poll_youtube_channel():
         # Step 1: Get channel info to find uploads playlist ID
         channel_params = {
             "part": "contentDetails",
-            "id": "UCvFG9tmS4lrIWubj994CY5g",
+            "id": "UC3nhAUpe7aBm1rFCBgoWWcA",  # Sangam Talks (youtube.com/sangamtalks)
             "key": settings.YOUTUBE_API_KEY
         }
         
