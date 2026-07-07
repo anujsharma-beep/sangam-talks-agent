@@ -168,7 +168,7 @@ def post_to_platforms(video_id: str, db: Session):
     adapters = {
         "x": XAdapter({
             "access_token": settings.X_ACCESS_TOKEN,
-            "username": "sangamtalks"
+            "username": settings.X_USERNAME
         }),
         "linkedin": LinkedInAdapter({
             "access_token": settings.LINKEDIN_ACCESS_TOKEN,
