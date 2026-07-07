@@ -44,5 +44,9 @@ class XAdapter(SocialMediaAdapter):
             return (False, str(e))
     
     def get_post_url(self, post_id: str) -> str:
-        username = self.credentials.get("username", "sangamtalks")
+        username = self.credentials.get("username")
+        if not username:
+            # No username configured — return the ID-only form, which
+            # still resolves correctly on x.com regardless of account.
+            return f"https://twitter.com/i/web/status/{post_id}"
         return f"https://twitter.com/{username}/status/{post_id}"
