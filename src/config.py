@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     X_API_SECRET: str = os.getenv("X_API_SECRET", "")
     X_ACCESS_TOKEN: str = os.getenv("X_ACCESS_TOKEN", "")
     X_ACCESS_SECRET: str = os.getenv("X_ACCESS_SECRET", "")
+    X_USERNAME: str = os.getenv("X_USERNAME", "")  # the handle whose account X_ACCESS_TOKEN authorizes — used only to build the post URL
     
     LINKEDIN_ACCESS_TOKEN: str = os.getenv("LINKEDIN_ACCESS_TOKEN", "")
     LINKEDIN_PERSON_URN: str = os.getenv("LINKEDIN_PERSON_URN", "")
