@@ -52,7 +52,6 @@ def process_video(video_id: str):
     db = None
     
     try:
-        # Get session factory
         SessionFactory = get_session_factory()
         if SessionFactory is None:
             logger.error(f"Session factory is None - cannot process video {video_id}")
@@ -60,7 +59,6 @@ def process_video(video_id: str):
         
         db = SessionFactory()
         
-        # 1. Get video from DB
         video = db.query(Video).filter(Video.id == video_id).first()
         if not video:
             logger.error(f"Video {video_id} not found in database")
@@ -68,7 +66,6 @@ def process_video(video_id: str):
         
         logger.info(f"Processing video {video_id}...")
         
-        # 2. Fetch YouTube metadata
         logger.info(f"Fetching metadata for {video_id}")
         metadata = fetch_youtube_metadata(video_id)
         
@@ -78,7 +75,6 @@ def process_video(video_id: str):
             db.commit()
             return
         
-        # Update video
         video.title = metadata["title"]
         video.description = metadata["description"]
         video.thumbnail_url = metadata["thumbnail_url"]
@@ -103,7 +99,6 @@ def process_video(video_id: str):
             db.commit()
             return
         
-        # Store generated content
         for platform, result in results.items():
             try:
                 if result["status"] == "success":
@@ -127,17 +122,11 @@ def process_video(video_id: str):
         
         db.commit()
         
-        # 4. Post to all platforms
-        logger.info(f"Posting to platforms for {video_id}")
-        try:
-            post_to_platforms(video_id, db)
-        except Exception as post_error:
-            logger.error(f"Error posting to platforms for {video_id}: {post_error}", exc_info=True)
-            video.status = VideoStatus.FAILED
-            db.commit()
-            return
-        
-        video.status = VideoStatus.POSTED
+        # 4. STOP HERE — content now waits for human review at /review before
+        # anything is posted. Publishing happens only when a reviewer approves
+        # content and clicks "Publish approved" on the review page, which
+        # calls post_to_platforms() itself, filtered to approved content only.
+        video.status = VideoStatus.CONTENT_GENERATED
         db.commit()
         
         log_event(logger, "video_processed", {
@@ -146,7 +135,7 @@ def process_video(video_id: str):
             "status": "success"
         })
         
-        logger.info(f"Video {video_id} processing complete ✓")
+        logger.info(f"Video {video_id} content generated, awaiting review at /review ✓")
     
     except Exception as e:
         logger.error(f"Orchestration error for {video_id}: {e}", exc_info=True)
@@ -164,9 +153,10 @@ def process_video(video_id: str):
             db.close()
 
 def post_to_platforms(video_id: str, db: Session):
-    """Post generated content to all platforms."""
+    """Post APPROVED generated content to its platform. Content still at
+    PENDING or REJECTED is skipped — this function only publishes what a
+    human reviewer has explicitly approved via /review."""
     
-    # Initialize adapters with credentials
     adapters = {
         "x": XAdapter({
             "access_token": settings.X_ACCESS_TOKEN,
@@ -186,9 +176,9 @@ def post_to_platforms(video_id: str, db: Session):
         })
     }
     
-    # Get generated content for this video
     gen_contents = db.query(GeneratedContent).filter(
-        GeneratedContent.video_id == video_id
+        GeneratedContent.video_id == video_id,
+        GeneratedContent.status == ContentStatus.APPROVED
     ).all()
     
     video = db.query(Video).filter(Video.id == video_id).first()
@@ -205,7 +195,6 @@ def post_to_platforms(video_id: str, db: Session):
             adapter = adapters[platform]
             success, result = adapter.post(content, video.thumbnail_url)
             
-            # Create post record
             post = Post(
                 video_id=video_id,
                 generated_content_id=gen_content.id,
@@ -218,6 +207,7 @@ def post_to_platforms(video_id: str, db: Session):
             
             if success:
                 post.post_url = adapter.get_post_url(result)
+                gen_content.status = ContentStatus.POSTED
                 logger.info(f"Posted to {platform}: {post.post_url}")
             else:
                 logger.error(f"Failed to post to {platform}: {result}")
@@ -243,3 +233,11 @@ def post_to_platforms(video_id: str, db: Session):
             db.add(post)
     
     db.commit()
+
+    remaining_pending = db.query(GeneratedContent).filter(
+        GeneratedContent.video_id == video_id,
+        GeneratedContent.status == ContentStatus.PENDING
+    ).count()
+    if remaining_pending == 0 and video:
+        video.status = VideoStatus.POSTED
+        db.commit()
