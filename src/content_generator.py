@@ -9,6 +9,7 @@ def generate_platform_content(
     title: str,
     description: str,
     thumbnail_url: str,
+    video_url: str,
     platform: str
 ) -> str:
     """
@@ -18,6 +19,8 @@ def generate_platform_content(
         title: Video title
         description: Video description
         thumbnail_url: Video thumbnail URL
+        video_url: The actual watchable YouTube link — must be used verbatim
+                   in the generated post, not invented by the model
         platform: One of ["x", "linkedin", "facebook", "instagram"]
     
     Returns:
@@ -37,6 +40,7 @@ def generate_platform_content(
 
 Video Title: {title}
 Video Description: {description}
+Video URL: {video_url}
 Thumbnail: {thumbnail_url}
 
 Your task: Generate content for {platform.upper()} following these guidelines:
@@ -45,6 +49,7 @@ Your task: Generate content for {platform.upper()} following these guidelines:
 - Platform style: {platform_config.get('style', '')}
 - Brand voice: Thoughtful, evidence-based, patriotic/revivalist
 - Include hashtags: #SangamTalks {platform_config.get('hashtags', '')}
+- If you include a link, it MUST be exactly this URL: {video_url} — never substitute any other URL, including the website homepage
 
 {prompt_template}
 
@@ -70,7 +75,8 @@ Generate ONLY the post content, no explanations or commentary."""
 def generate_all_platforms(
     title: str,
     description: str,
-    thumbnail_url: str
+    thumbnail_url: str,
+    video_url: str
 ) -> dict:
     """Generate content for all four platforms."""
     
@@ -80,7 +86,7 @@ def generate_all_platforms(
     for platform in platforms:
         try:
             content = generate_platform_content(
-                title, description, thumbnail_url, platform
+                title, description, thumbnail_url, video_url, platform
             )
             results[platform] = {
                 "status": "success",
