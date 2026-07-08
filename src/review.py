@@ -301,7 +301,7 @@ async def review_decision(video_id: str, platform: str, payload: dict = Body(...
             GeneratedContent.platform == platform
         ).first()
         if not gc:
-return JSONResponse({"status": "error", "error": "Content not found"}, status_code=404)
+            return JSONResponse({"status": "error", "error": "Content not found"}, status_code=404)
 
         if action == "approve":
             gc.approved_content = content
