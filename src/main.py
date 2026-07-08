@@ -8,6 +8,7 @@ from src.db import init_db, get_session_factory, Video, VideoStatus
 from src.orchestrator import process_video
 from src.config import settings, validate_required_settings
 from src.logger import setup_logging, logger
+from src.review import router as review_router
 
 setup_logging(settings.LOG_LEVEL)
 
@@ -15,6 +16,7 @@ app = FastAPI(
     title="SangamTalks Syndication Agent",
     version="1.0.0"
 )
+app.include_router(review_router)
 
 @app.on_event("startup")
 async def startup():
@@ -29,7 +31,7 @@ async def startup():
         
         logger.info("Starting YouTube polling scheduler...")
         start_scheduler()
-        logger.info("YouTube polling started (checking every 2 minutes) ✓")
+        logger.info("YouTube polling started (checking every 60 minutes) ✓")
     except Exception as e:
         logger.error(f"Startup error: {e}", exc_info=True)
         raise
@@ -82,6 +84,7 @@ async def test_page():
             
             <p style="margin-top: 30px; font-size: 12px; color: #999;">
                 <strong>Next steps:</strong> After clicking the button, go to Railway Dashboard → Deployments → View logs to see processing details.
+                Content now stops for review — go to <a href="/review">/review</a> to approve or reject it before it posts anywhere.
             </p>
         </div>
 
@@ -160,21 +163,18 @@ async def test_process_video(video_id: str):
     except Exception as e:
         logger.error(f"Test endpoint error: {e}", exc_info=True)
         return {"status": "error", "error": str(e)}
-        
-# Background scheduler for polling
+
 scheduler = BackgroundScheduler()
 
 def poll_youtube_channel():
-    """Poll YouTube uploads playlist for new videos every 2 minutes."""
+    """Poll YouTube uploads playlist for new videos every 60 minutes."""
     try:
         logger.info("Polling YouTube for new videos...")
         
-        # Validate API key exists
         if not settings.YOUTUBE_API_KEY or settings.YOUTUBE_API_KEY.startswith('test-'):
             logger.error("YouTube API key not configured - skipping poll")
             return
         
-        # Step 1: Get channel info to find uploads playlist ID
         channel_params = {
             "part": "contentDetails",
             "id": "UC3nhAUpe7aBm1rFCBgoWWcA",  # Sangam Talks (youtube.com/sangamtalks)
@@ -206,7 +206,6 @@ def poll_youtube_channel():
             logger.error(f"Error getting channel uploads playlist: {channel_error}", exc_info=True)
             return
         
-        # Step 2: Get videos from uploads playlist
         playlist_params = {
             "part": "snippet",
             "playlistId": uploads_playlist_id,
@@ -246,7 +245,6 @@ def poll_youtube_channel():
                     logger.warning("Video ID missing from playlist item")
                     continue
                 
-                # Check if already processed
                 SessionFactory = None
                 db = None
                 
@@ -264,7 +262,6 @@ def poll_youtube_channel():
                         db.close()
                         continue
                     
-                    # Create Video record in database FIRST
                     logger.info(f"Found new video: {video_id} - creating record...")
                     
                     video = Video(
@@ -282,7 +279,6 @@ def poll_youtube_channel():
                     
                     logger.info(f"Video record created for {video_id}")
                     
-                    # Now process the video in background thread
                     logger.info(f"Processing video {video_id}...")
                     process_video(video_id)
                     logger.info(f"Video {video_id} processing complete")
