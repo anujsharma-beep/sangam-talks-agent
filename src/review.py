@@ -301,4 +301,52 @@ async def review_decision(video_id: str, platform: str, payload: dict = Body(...
             GeneratedContent.platform == platform
         ).first()
         if not gc:
-            return JSONResponse({"status": "error", "error": "Content not found"},
+return JSONResponse({"status": "error", "error": "Content not found"}, status_code=404)
+
+        if action == "approve":
+            gc.approved_content = content
+            gc.status = ContentStatus.APPROVED
+            gc.rejection_reason = None
+            logger.info(f"Content approved for {video_id}/{platform}")
+        else:
+            gc.status = ContentStatus.REJECTED
+            gc.rejection_reason = reason.strip()
+            logger.info(f"Content rejected for {video_id}/{platform}: {reason.strip()}")
+
+        db.commit()
+        return {"status": "ok"}
+    finally:
+        db.close()
+
+
+@router.post("/review/{video_id}/publish")
+async def review_publish(video_id: str):
+    """Publish everything currently APPROVED for this video."""
+    db = _get_session()
+    try:
+        approved_count = db.query(GeneratedContent).filter(
+            GeneratedContent.video_id == video_id,
+            GeneratedContent.status == ContentStatus.APPROVED
+        ).count()
+
+        if approved_count == 0:
+            return JSONResponse(
+                {"status": "error", "error": "Nothing is approved yet for this video"},
+                status_code=400
+            )
+
+        post_to_platforms(video_id, db)
+
+        posted = db.query(GeneratedContent).filter(
+            GeneratedContent.video_id == video_id,
+            GeneratedContent.status == ContentStatus.POSTED
+        ).count()
+        still_approved = approved_count - posted
+
+        message = f"Published {posted} platform(s)."
+        if still_approved > 0:
+            message += f" {still_approved} approved platform(s) failed to post — check Railway logs, then try Publish again."
+
+        return {"status": "ok", "message": message, "posted": posted, "failed": still_approved}
+    finally:
+        db.close()
