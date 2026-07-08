@@ -56,6 +56,7 @@ class GeneratedContent(Base):
     platform = Column(String, nullable=False)
     draft_content = Column(Text, nullable=False)
     approved_content = Column(Text)
+    rejection_reason = Column(Text)
     status = Column(Enum(ContentStatus), default=ContentStatus.PENDING)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
