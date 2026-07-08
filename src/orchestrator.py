@@ -89,11 +89,13 @@ def process_video(video_id: str):
         
         # 3. Generate content for all platforms
         logger.info(f"Generating content for {video_id}")
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
         try:
             results = generate_all_platforms(
                 metadata["title"],
                 metadata["description"],
-                metadata["thumbnail_url"]
+                metadata["thumbnail_url"],
+                video_url
             )
         except Exception as gen_error:
             logger.error(f"Content generation error for {video_id}: {gen_error}", exc_info=True)
