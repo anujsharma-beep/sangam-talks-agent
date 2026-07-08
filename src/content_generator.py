@@ -27,7 +27,6 @@ def generate_platform_content(
         Generated content for the platform
     """
     
-    # Get platform-specific prompt template
     platform_prompts = prompts_config.get("platforms", {})
     platform_config = platform_prompts.get(platform, {})
     
@@ -35,7 +34,6 @@ def generate_platform_content(
     character_limit = platform_config.get("character_limit", 280)
     tone = platform_config.get("tone", "professional")
     
-    # Build the full prompt
     full_prompt = f"""You are a content expert for Sangam Talks, a channel about India's civilizational narrative.
 
 Video Title: {title}
