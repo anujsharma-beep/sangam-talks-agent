@@ -15,13 +15,7 @@ class XAdapter(SocialMediaAdapter):
                 "Content-Type": "application/json"
             }
             
-            # For full production use, import tweepy or requests
-            # This is a simplified version
-            
             payload = {"text": content}
-            
-            # Note: Full image upload requires additional media endpoint
-            # For MVP, just post text + link
             
             response = httpx.post(
                 f"{self.BASE_URL}/tweets",
@@ -46,7 +40,5 @@ class XAdapter(SocialMediaAdapter):
     def get_post_url(self, post_id: str) -> str:
         username = self.credentials.get("username")
         if not username:
-            # No username configured — return the ID-only form, which
-            # still resolves correctly on x.com regardless of account.
             return f"https://twitter.com/i/web/status/{post_id}"
         return f"https://twitter.com/{username}/status/{post_id}"
