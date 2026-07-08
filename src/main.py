@@ -130,14 +130,37 @@ async def test_process_video(video_id: str):
     """Test endpoint to manually trigger video processing."""
     logger.info(f"Manual test trigger for video {video_id}")
     try:
-        # Run in thread to avoid blocking
+        SessionFactory = get_session_factory()
+        if SessionFactory is None:
+            return {"status": "error", "error": "Database not ready"}
+
+        db = SessionFactory()
+        try:
+            existing = db.query(Video).filter(Video.id == video_id).first()
+            if not existing:
+                video = Video(
+                    id=video_id,
+                    title="",
+                    description="",
+                    thumbnail_url="",
+                    published_at=None,
+                    status=VideoStatus.RECEIVED
+                )
+                db.add(video)
+                db.commit()
+                logger.info(f"Test: created Video record for {video_id}")
+            else:
+                logger.info(f"Test: Video {video_id} already exists, reprocessing")
+        finally:
+            db.close()
+
         thread = threading.Thread(target=process_video, args=(video_id,))
         thread.start()
         return {"status": "processing", "video_id": video_id}
     except Exception as e:
         logger.error(f"Test endpoint error: {e}", exc_info=True)
         return {"status": "error", "error": str(e)}
-
+        
 # Background scheduler for polling
 scheduler = BackgroundScheduler()
 
