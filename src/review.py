@@ -11,15 +11,33 @@ Nothing here talks to any social platform directly — publishing goes through
 the existing, already-tested orchestrator.post_to_platforms(), which only
 ever posts content with status == APPROVED.
 """
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from html import escape as h
+import secrets
 from src.db import get_session_factory, Video, GeneratedContent, ContentStatus, VideoStatus, Post
 from src.orchestrator import post_to_platforms
-from src.config import prompts_config
+from src.config import prompts_config, settings
 from src.logger import logger
 
-router = APIRouter()
+security = HTTPBasic()
+
+def require_login(credentials: HTTPBasicCredentials = Depends(security)):
+    """Every route in this file requires this. Without it, anyone with the
+    URL could approve and publish real posts to real social accounts —
+    this was flagged as an open risk and is not optional."""
+    valid_user = secrets.compare_digest(credentials.username, settings.REVIEW_USERNAME)
+    valid_pass = secrets.compare_digest(credentials.password, settings.REVIEW_PASSWORD)
+    if not (valid_user and valid_pass):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+router = APIRouter(dependencies=[Depends(require_login)])
 
 PLATFORM_LABELS = {
     "x": "X",
@@ -67,6 +85,18 @@ textarea { width: 100%; box-sizing: border-box; font-family: Arial; font-size: 1
 .rejection-note { background: #f8d7da; color: #721c24; padding: 8px 12px; border-radius: 4px; font-size: 13px; margin-bottom: 8px; }
 .posted-note { background: #d1ecf1; color: #0c5460; padding: 8px 12px; border-radius: 4px; font-size: 13px; margin-bottom: 8px; }
 .empty-state { text-align: center; padding: 60px 20px; color: #999; }
+.section-title { font-size: 16px; font-weight: bold; color: #333; margin: 28px 0 14px 0; }
+.section-title:first-of-type { margin-top: 0; }
+.queue-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 700px) { .queue-grid { grid-template-columns: 1fr; } }
+.video-card { border: 1px solid #eee; border-radius: 8px; overflow: hidden; background: white; display: flex; flex-direction: column; }
+.video-card .thumb { width: 100%; height: 140px; object-fit: cover; background: #ddd; display: block; }
+.video-card .thumb-placeholder { width: 100%; height: 140px; background: #ddd; display: flex; align-items: center; justify-content: center; color: #999; font-size: 28px; }
+.video-card-body { padding: 14px; flex: 1; display: flex; flex-direction: column; }
+.video-card h3 { margin: 0 0 6px 0; font-size: 14px; line-height: 1.3; }
+.video-card .meta { font-size: 11px; color: #999; margin-bottom: 10px; }
+.video-card .badges { margin-bottom: 12px; }
+.video-card .btn-review { margin-top: auto; text-align: center; }
 #publishResult { margin-top: 16px; padding: 14px; border-radius: 4px; display: none; }
 .success { background: #d4edda; color: #155724; }
 .error { background: #f8d7da; color: #721c24; }
@@ -80,7 +110,24 @@ def _get_session():
 
 @router.get("/review", response_class=HTMLResponse)
 async def review_queue():
-    """List every video that still has content awaiting a decision or ready to publish."""
+    """List every video that still has content awaiting a decision or ready to publish.
+
+    Two sections:
+    - "Ready to publish": every platform for this video is APPROVED (none
+      pending, none rejected, none posted yet) -- one click of Publish
+      finishes it.
+    - "Needs review": anything else still actionable (has a PENDING platform,
+      or a mix of decided/undecided platforms).
+
+    Videos where everything is already POSTED and/or REJECTED -- nothing left
+    for a human to do -- don't appear at all.
+
+    Sort order: newest video first, by when it entered our system
+    (Video.created_at) -- this tracks upload chronology closely in practice
+    since videos are processed shortly after upload, and avoids relying on
+    YouTube's published_at, which is stored as a raw string rather than a
+    parsed datetime and isn't safe to sort on directly.
+    """
     db = _get_session()
     try:
         all_content = db.query(GeneratedContent).all()
@@ -88,7 +135,14 @@ async def review_queue():
         for gc in all_content:
             by_video.setdefault(gc.video_id, []).append(gc)
 
-        items_html = []
+        ready_to_publish = []
+        needs_review = []
+
+        video_ids = list(by_video.keys())
+        videos = {
+            v.id: v for v in db.query(Video).filter(Video.id.in_(video_ids)).all()
+        } if video_ids else {}
+
         for video_id, rows in by_video.items():
             pending = sum(1 for r in rows if r.status == ContentStatus.PENDING)
             approved = sum(1 for r in rows if r.status == ContentStatus.APPROVED)
@@ -96,44 +150,81 @@ async def review_queue():
             posted = sum(1 for r in rows if r.status == ContentStatus.POSTED)
 
             if pending == 0 and approved == 0:
-                continue
+                continue  # fully resolved (all posted/rejected) -- nothing left to do
 
-            video = db.query(Video).filter(Video.id == video_id).first()
+            video = videos.get(video_id)
+            entry = {
+                "video_id": video_id,
+                "video": video,
+                "pending": pending, "approved": approved,
+                "rejected": rejected, "posted": posted,
+            }
+
+            all_approved = (approved == len(rows)) and pending == 0 and rejected == 0 and posted == 0
+            if all_approved:
+                ready_to_publish.append(entry)
+            else:
+                needs_review.append(entry)
+
+        def sort_key(entry):
+            v = entry["video"]
+            return v.created_at if (v and v.created_at) else ""
+
+        ready_to_publish.sort(key=sort_key, reverse=True)
+        needs_review.sort(key=sort_key, reverse=True)
+
+        def render_card(entry):
+            video_id, video = entry["video_id"], entry["video"]
             title = video.title if video and video.title else video_id
+            thumb_url = video.thumbnail_url if video else None
+
+            if thumb_url:
+                thumb_html = f'<img class="thumb" src="{h(thumb_url)}" alt="">'
+            else:
+                thumb_html = '<div class="thumb-placeholder">&#127909;</div>'
 
             badges = ""
-            if pending:
-                badges += f'<span class="badge" style="background:#fff3cd;color:#856404;">{pending} pending</span>'
-            if approved:
-                badges += f'<span class="badge" style="background:#d4edda;color:#155724;">{approved} approved</span>'
-            if rejected:
-                badges += f'<span class="badge" style="background:#f8d7da;color:#721c24;">{rejected} rejected</span>'
-            if posted:
-                badges += f'<span class="badge" style="background:#d1ecf1;color:#0c5460;">{posted} posted</span>'
+            if entry["pending"]:
+                badges += f'<span class="badge" style="background:#fff3cd;color:#856404;">{entry["pending"]} pending</span>'
+            if entry["approved"]:
+                badges += f'<span class="badge" style="background:#d4edda;color:#155724;">{entry["approved"]} approved</span>'
+            if entry["rejected"]:
+                badges += f'<span class="badge" style="background:#f8d7da;color:#721c24;">{entry["rejected"]} rejected</span>'
+            if entry["posted"]:
+                badges += f'<span class="badge" style="background:#d1ecf1;color:#0c5460;">{entry["posted"]} posted</span>'
 
-            items_html.append(f"""
-            <div class="queue-item">
-                <div>
+            return f"""
+            <div class="video-card">
+                {thumb_html}
+                <div class="video-card-body">
                     <h3>{h(title)}</h3>
                     <div class="meta">Video ID: {h(video_id)}</div>
-                    <div style="margin-top:8px;">{badges}</div>
+                    <div class="badges">{badges}</div>
+                    <a class="btn btn-review" href="/review/{h(video_id)}">Review &rarr;</a>
                 </div>
-                <a class="btn-review" href="/review/{h(video_id)}">Review &rarr;</a>
             </div>
-            """)
+            """
 
-        body = "".join(items_html) if items_html else (
-            '<div class="empty-state">No content is currently awaiting review.<br>'
-            'New videos processed via /test or the scheduler will appear here.</div>'
-        )
+        sections_html = ""
+        if ready_to_publish:
+            sections_html += '<div class="section-title">&#9989; Approved on all platforms -- ready to publish</div>'
+            sections_html += '<div class="queue-grid">' + "".join(render_card(e) for e in ready_to_publish) + '</div>'
+        if needs_review:
+            sections_html += '<div class="section-title">&#128221; Needs review</div>'
+            sections_html += '<div class="queue-grid">' + "".join(render_card(e) for e in needs_review) + '</div>'
+        if not sections_html:
+            sections_html = (
+                '<div class="empty-state">No content is currently awaiting review.<br>'
+                'New videos processed via /test or the scheduler will appear here.</div>'
+            )
 
         return f"""
         <!DOCTYPE html><html><head><title>Content Review Queue</title>
         <style>{PAGE_STYLE}</style></head><body>
-        <div class="container">
+        <div class="container" style="max-width:1100px;">
             <h1>Content Review Queue</h1>
             <p class="sub">Videos with generated content awaiting approval before anything is published.</p>
-            {body}
+            {sections_html}
         </div>
         </body></html>
         """
