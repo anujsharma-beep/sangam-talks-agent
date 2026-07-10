@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     # Alerts
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+
+    # Review UI access control — required. Without these set, /review and
+    # /test are reachable by anyone with the URL, including the "Publish
+    # approved" action that posts to real social accounts.
+    REVIEW_USERNAME: str = os.getenv("REVIEW_USERNAME", "")
+    REVIEW_PASSWORD: str = os.getenv("REVIEW_PASSWORD", "")
     
     # App
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
@@ -90,6 +96,8 @@ def validate_required_settings():
     required = {
         'YOUTUBE_API_KEY': settings.YOUTUBE_API_KEY,
         'ANTHROPIC_API_KEY': settings.ANTHROPIC_API_KEY,
+        'REVIEW_USERNAME': settings.REVIEW_USERNAME,
+        'REVIEW_PASSWORD': settings.REVIEW_PASSWORD,
     }
     
     missing = []
